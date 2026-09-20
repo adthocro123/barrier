@@ -19,6 +19,55 @@ error() { tput bold; tput setaf 1; echo "$@"; tput sgr0 ; }
 success() { tput bold; tput setaf 2; echo "$@"; tput sgr0 ; }
 warn() { tput bold; tput setaf 3; echo "$@"; tput sgr0 ; }
 
+# Re-sign the finished bundle, then refuse to continue if the result is not
+# actually loadable.
+#
+# Why this is not optional: macdeployqt copies the Qt frameworks and plugins
+# in and rewrites their load commands with install_name_tool. Editing a Mach-O
+# invalidates whatever signature it carried, and Qt's own binaries arrive
+# signed. On Apple Silicon every arm64 page must have a valid signature, so a
+# *broken* signature is fatal in a way that no signature is not: the kernel
+# SIGKILLs the process as soon as dyld maps the offending page. It surfaces as
+# a crash deep inside dlopen while Qt loads libqcocoa.dylib, with termination
+# reason "CODESIGNING, Code 2, Invalid Page", which reads like a Qt bug rather
+# than a packaging one.
+#
+# Ad-hoc ("-") signing is enough to make the binaries runnable. It is NOT
+# notarization: Gatekeeper still warns on first launch. Real Developer ID
+# signing is a separate, later job.
+codesign_bundle() {
+    info "Ad-hoc signing the bundle"
+
+    # Sign inside-out: nested code first, the bundle last. Signing the app
+    # with --deep is discouraged by Apple and handles frameworks poorly, so
+    # each piece is signed explicitly.
+    find InputLeap.app/Contents \( -name '*.dylib' -o -name '*.so' \) -type f \
+        -exec codesign --force --sign - {} + || return 1
+
+    if [ -d InputLeap.app/Contents/Frameworks ]; then
+        find InputLeap.app/Contents/Frameworks -maxdepth 1 -name '*.framework' -type d \
+            -exec codesign --force --sign - {} + || return 1
+    fi
+
+    # The helper executables are separate Mach-O files, not covered by the
+    # bundle seal, so they need signing in their own right.
+    for B_EXE in "$B_INPUTLEAPC" "$B_INPUTLEAPS"; do
+        [ -f "$B_EXE" ] && { codesign --force --sign - "$B_EXE" || return 1; }
+    done
+
+    codesign --force --sign - InputLeap.app || return 1
+
+    # The gate. A bundle that fails this will be killed on launch, so it must
+    # never reach a dmg or a release.
+    info "Verifying the signature"
+    if ! codesign --verify --deep --strict --verbose=2 InputLeap.app; then
+        error "The signed bundle does not verify."
+        error "Shipping it would crash on launch with a code signing error."
+        return 1
+    fi
+    success "Bundle signature verifies"
+}
+
 info "Checking for bundle contents"
 if [ ! -d "InputLeap.app/Contents" ]; then
     error "Please make sure that the build completed successfully"
@@ -37,13 +86,21 @@ cp -r "$B_BINDIR" "$B_MACOS" || exit 1
 
 DEPLOYQT=@QT_DEPLOY_TOOL@
 
-# Use macdeployqt to include libraries and create dmg
 if [ "$B_BUILDTYPE" = "Release" ]; then
-    info "Building Release disk image (dmg)"
-    "$DEPLOYQT" InputLeap.app -dmg \
+    # Deploy first, sign second, package third. macdeployqt's own -dmg would
+    # build the image before we get a chance to sign, so the dmg is created
+    # separately below.
+    info "Deploying Qt into the bundle"
+    "$DEPLOYQT" InputLeap.app \
     -executable="$B_INPUTLEAPC" \
     -executable="$B_INPUTLEAPS" || exit 1
-    mv "InputLeap.dmg" "InputLeap-$B_VERSION.dmg" || exit 1
+
+    codesign_bundle || exit 1
+
+    info "Building Release disk image (dmg)"
+    rm -f "InputLeap-$B_VERSION.dmg"
+    hdiutil create -volname "InputLeap" -srcfolder InputLeap.app \
+        -ov -format UDZO "InputLeap-$B_VERSION.dmg" || exit 1
     success "Created InputLeap-$B_VERSION.dmg"
 else
     warn "Disk image (dmg) only created for Release builds"
@@ -51,5 +108,9 @@ else
     "$DEPLOYQT" InputLeap.app -no-strip \
     -executable="$B_INPUTLEAPC" \
     -executable="$B_INPUTLEAPS" || exit 1
+
+    # Debug bundles are run too, so they need valid signatures just as much.
+    codesign_bundle || exit 1
+
     success "Bundle created successfully"
 fi
