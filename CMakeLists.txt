@@ -115,7 +115,18 @@ if (UNIX)
     list (APPEND libs Threads::Threads)
 
     if (APPLE)
-        set (CMAKE_CXX_FLAGS "--sysroot ${CMAKE_OSX_SYSROOT} ${CMAKE_CXX_FLAGS} -DGTEST_USE_OWN_TR1_TUPLE=1")
+        # Only pass --sysroot when we actually have one. CMAKE_OSX_SYSROOT is
+        # empty by default on current CMake + Xcode (CMake then lets the
+        # compiler pick its own default SDK), and the old unconditional form
+        # expanded to a bare "--sysroot" that swallowed the *next* flag as its
+        # argument. Compiling still worked, but linking failed with the
+        # baffling "ld: library 'c++' not found", because the library search
+        # path was then rooted at a directory that does not exist.
+        # The "=" form is used so an empty value could never do that again.
+        if (CMAKE_OSX_SYSROOT)
+            set (CMAKE_CXX_FLAGS "--sysroot=${CMAKE_OSX_SYSROOT} ${CMAKE_CXX_FLAGS}")
+        endif()
+        set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DGTEST_USE_OWN_TR1_TUPLE=1")
 
         find_library (lib_ScreenSaver ScreenSaver)
         find_library (lib_IOKit IOKit)

@@ -1,5 +1,10 @@
 build_env.*
+# The generated build config. On a case-insensitive filesystem (macOS,
+# Windows) this pattern also matches the hand-written source header
+# src/lib/server/Config.h, so that real source file has to be spared
+# explicitly or it never gets committed and no clone can build.
 config.h
+!src/lib/server/Config.h
 .DS_Store
 *.pyc
 *.o
@@ -22,7 +27,10 @@ src/gui/.qmake.stash
 src/gui/.rnd
 src/setup/win32/input-leap.suo
 Makefile
+# Generated CMake scaffolding from an in-source build. The project's own
+# modules live in cmake/ and are required by CMakeLists.txt, so keep them.
 *.cmake
+!cmake/*.cmake
 **/CMakeFiles/
 CMakeCache.txt
 CMakePresets.json
@@ -36,7 +44,10 @@ CMakeLists.txt.user
 # Transient in-project-directory dependencies
 /deps/
 /out/build/x64-Debug
+# The bundle staging directory a build produces. The macOS app template and
+# installer scripts that get copied *into* it are checked-in sources.
 bundle
+!dist/macos/bundle/
 compile_commands.json
 # Cache (used by clangd)
 .cache
